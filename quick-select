@@ -1,0 +1,423 @@
+#!/usr/bin/env python3
+"""
+A utility that makes selecting an item from a list quick and easy
+
+# Source: https://github.com/sourcesimian/bin 
+"""
+
+import argparse
+import curses
+import math
+import os
+import sys
+import time
+
+from curses import wrapper
+from curses.textpad import rectangle
+from collections import namedtuple
+
+Item = namedtuple('Item', ['value', 'display', 'extra'])
+YX = namedtuple('YX', ['y', 'x'])
+HW = namedtuple('HW', ['h', 'w'])
+TLBR = namedtuple('TLBR', ['t', 'l', 'b', 'r'])
+
+class Obj(object):
+    def __init__(self, *keys):
+        for key in keys:
+            setattr(self, key, None)
+
+
+DEMO_CANDIDATES = [
+    Item('Marmoset', 'marmoset', ''),
+    Item('Lovebird', 'lovebird', ''),
+    Item('Duckbill Platypus', 'duckbill platypus', ''),
+    Item('Aardvark', 'aardvark', ''),
+    Item('Cow', 'cow', ''),
+    Item('Hedgehog', 'hedgehog', ''),
+    Item('Snake', 'snake', ''),
+    Item('Starfish', 'starfish', ''),
+    Item('Moose', 'moose', ''),
+    Item('Walrus', 'walrus', ''),
+    Item('Kangaroo', 'kangaroo', ''),
+    Item('Wombat', 'wombat', ''),
+    Item('Buffalo', 'buffalo', ''),
+    Item('Chinchilla', 'chinchilla', ''),
+    Item('Otter', 'otter', ''),
+    Item('Guanaco', 'guanaco', ''),
+    Item('Argali', 'argali', ''),
+    Item('Raccoon', 'raccoon', ''),
+    Item('Zebu', 'zebu', ''),
+    Item('Leopard', 'leopard', ''),
+    Item('Vicuna', 'vicuna', ''),
+    Item('Musk Deer', 'musk deer', ''),
+    Item('Coati', 'coati', ''),
+    Item('Giraffe', 'giraffe', ''),
+    Item('Sheep', 'sheep', ''),
+    Item('Boar', 'boar', ''),
+    Item('Stallion', 'stallion', ''),
+    Item('Opossum', 'opossum', ''),
+    Item('Ground Hog', 'ground hog', ''),
+    Item('Gazelle', 'gazelle', ''),
+    Item('Doe', 'doe', ''),
+    Item('Eagle Owl', 'eagle owl', ''),
+    Item('Bear', 'bear', ''),
+    Item('Seal', 'seal', ''),
+    Item('Mountain Goat', 'mountain goat', ''),
+    Item('Puppy', 'puppy', ''),
+    Item('Dromedary', 'dromedary', ''),
+    Item('Springbok', 'springbok', ''),
+    Item('Hog', 'hog', ''),
+    Item('Squirrel', 'squirrel', ''),
+    Item('Whale', 'whale', ''),
+    Item('Frog', 'frog', ''),
+    Item('Bumble Bee', 'bumble bee', ''),
+    Item('Yak', 'yak', ''),
+    Item('Addax', 'addax', ''),
+    Item('Highland Cow', 'highland cow', ''),
+    Item('Dormouse', 'dormouse', ''),
+    Item('Shrew', 'shrew', ''),
+    Item('Elephant', 'elephant', ''),
+    Item('Armadillo', 'armadillo', ''),
+    Item('Chipmunk', 'chipmunk', ''),
+    Item('Aoudad', 'aoudad', ''),
+    Item('Blue Crab', 'blue crab', ''),
+    Item('Finch', 'finch', ''),
+    Item('Pig', 'pig', ''),
+    Item('Bull', 'bull', ''),
+    Item('Grizzly Bear', 'grizzly bear', ''),
+    Item('Ox', 'ox', ''),
+    Item('Coyote', 'coyote', ''),
+    Item('Chimpanzee', 'chimpanzee', ''),
+    Item('Bunny', 'bunny', ''),
+    Item('Okapi', 'okapi', ''),
+    Item('Donkey', 'donkey', ''),
+    Item('Dog', 'dog', ''),
+    Item('Crow', 'crow', ''),
+    Item('Weasel', 'weasel', ''),
+    Item('Mouse', 'mouse', ''),
+    Item('Hippopotamus', 'hippopotamus', ''),
+    Item('Fawn', 'fawn', ''),
+    Item('Burro', 'burro', ''),
+    Item('Lynx', 'lynx', ''),
+    Item('Fox', 'fox', ''),
+    Item('Jerboa', 'jerboa', ''),
+    Item('Koala', 'koala', ''),
+    Item('Capybara', 'capybara', ''),
+    Item('Beaver', 'beaver', ''),
+    Item('Bison', 'bison', ''),
+    Item('Elk', 'elk', ''),
+    Item('Lion', 'lion', ''),
+    Item('Alligator', 'alligator', ''),
+    Item('Rat', 'rat', ''),
+    Item('Gorilla', 'gorilla', ''),
+    Item('Jaguar', 'jaguar', ''),
+    Item('Lizard', 'lizard', ''),
+    Item('Parakeet', 'parakeet', ''),
+    Item('Fish', 'fish', ''),
+    Item('Chicken', 'chicken', ''),
+    Item('Hyena', 'hyena', ''),
+    Item('Deer', 'deer', ''),
+    Item('Cheetah', 'cheetah', ''),
+    Item('Alpaca', 'alpaca', ''),
+    Item('Budgerigar', 'budgerigar', ''),
+    Item('Thorny Devil', 'thorny devil', ''),
+    Item('Anteater', 'anteater', ''),
+    Item('Monkey', 'monkey', ''),
+    Item('Colt', 'colt', ''),
+    Item('Dung Beetle', 'dung beetle', ''),
+    Item('Basilisk', 'basilisk', ''),
+    Item('Mynah Bird', 'mynah bird', ''),
+    Item('Camel', 'camel', '')
+]
+
+
+def load_candidates(fh):
+    ret = []
+    for line in fh:
+        line = line.strip()
+        if not line:
+            continue
+        if line.startswith('#'):
+            continue
+        fields = line.split(',')
+
+        value = fields[0].strip()
+
+        if len(fields) > 1:
+            display = fields[1].strip()
+        else:
+            display = value
+
+        if len(fields) > 2:
+            extra = fields[2].strip()
+        else:
+            extra = ''
+
+        item = Item(value, display, extra)
+        ret.append(item)
+    return ret
+
+
+def is_match(item, filters):
+    return all([f in item.display or f in item.extra for f in filters])
+
+
+def filtered_list(candidates_now, filters):
+    if not filters:
+        return candidates_now
+    ret = []
+    for item in candidates_now:
+        if is_match(item, filters):
+            ret.append(item)
+    return ret
+
+def calc_dimensions(candidates, screen):
+    frame = Obj('yx', 'hw')
+    display = Obj('yx', 'hw', 'tlbr', 'x_offset', 'pad')
+    match = Obj('yx', 'hw', 'tlbr', 'pad')
+
+    candidates.hw = HW(len(candidates.all), max([len(item.display) for item in candidates.all]) + 1)
+
+    frame.yx = YX(1, 0)
+    h_trim = 0
+    while True:
+        all_visible = True
+        h = min(candidates.hw.h, screen.hw.h - 2) - h_trim
+        if candidates.hw.w >= screen.hw.w:
+            w = screen.hw.w - 1
+            all_visible = False
+        else:
+            cols = math.ceil(candidates.hw.h / (h -2))
+            while True:
+                w = cols * candidates.hw.w  # Natural width
+                if w < (screen.hw.w - 1):
+                    break
+                all_visible = False
+                cols -= 1
+        if frame.hw and not all_visible:
+            break
+        frame.hw = HW(h, w)
+        h_trim += 1
+
+
+    display.yx = YX(0, 0)
+    display.tlbr = TLBR(frame.yx.y + 1, frame.yx.x + 1, frame.hw.h - 1, frame.hw.w - 1)
+    display.hw = HW(frame.hw.h - 2 , (math.ceil(candidates.hw.h/(frame.hw.h - 2))) * candidates.hw.w)
+    display.x_offset = 0
+
+    match.yx = YX(0, 0)
+    match.tlbr = TLBR(frame.hw.h + 1, 1, frame.hw.h + 1, screen.hw.w)
+    match.hw = HW(1, screen.hw.w - 2)
+
+    return frame, display, match
+
+
+def top(stdscr, title, prompt, all_candidates):
+    curses.noecho()
+    curses.cbreak()
+    curses.curs_set(0)
+
+    candidates = Obj('all', 'hw')
+    candidates.all = all_candidates
+
+    screen = Obj('hw')
+    screen.hw = HW(*stdscr.getmaxyx())
+    stdscr.addstr(0, 0, title[:screen.hw.w], curses.A_BOLD)
+
+    frame, display, match = calc_dimensions(candidates, screen)
+
+    rectangle(stdscr, *frame.yx, *frame.hw)
+    stdscr.refresh()
+
+    try:
+        display.pad = curses.newpad(*display.hw)
+    except curses.error:
+        raise ValueError('Unable to create display: %s' % (display.hw,))
+    match.pad = curses.newpad(*match.hw)
+
+    match_buf = ''
+    cursor_y = 0
+
+    def get_candidates(match_buf):
+        if match_buf:
+            for buf in (match_buf, match_buf[:-1] + ' ' + match_buf[-1], match_buf[:-1]):
+                candidates_now = filtered_list(candidates.all, buf.split())
+                if candidates_now:
+                    if buf != match_buf:
+                        flash_match(buf)
+                    else:
+                        update_match(prompt, buf)
+                    return buf, candidates_now
+        update_match(prompt, match_buf)
+        return match_buf, filtered_list(candidates.all, match_buf.split())
+
+    def update_match(prompt, match_buf, meta=curses.A_NORMAL):
+        while prompt and len(prompt) + 1 + len(match_buf) >= match.hw.w:
+            prompt = prompt[1:]
+
+        match_buf = match_buf[:match.hw.w - len(prompt) - 2]
+        match_str = prompt + ' ' + match_buf
+        match_str = match_str[:match.hw.w]
+        match.pad.addstr(0, 0, match_str + ' ' * (match.hw.w - len(match_str) - 1),
+                     meta)
+        match.pad.refresh(*match.yx, *match.tlbr)
+
+    def flash_match(match_buf):
+        update_match(prompt, match_buf, curses.A_REVERSE)
+        time.sleep(0.05)
+        update_match(prompt, match_buf)
+
+    def cursor_yx(i):
+        y = i % (display.hw.h)
+        x = int(i / (display.hw.h)) * candidates.hw.w
+        return y, x
+
+    def update_display(candidates_now):
+        for i in range(candidates.hw.h):
+            y, x = cursor_yx(i)
+
+            if i < len(candidates_now):
+                item = candidates_now[i]
+                text = item.display
+                text += ' ' * (candidates.hw.w - len(text) - 1)
+            else:
+                text = ' ' * (candidates.hw.w - 1)
+            if i == cursor_y:
+                meta = curses.A_STANDOUT | curses.A_BOLD
+            else:
+                meta = curses.A_NORMAL
+            display.pad.addstr(y, x, text, meta)
+
+        try:
+            display.pad.refresh(display.yx.y, display.yx.x + display.x_offset, *display.tlbr)
+        except:
+            raise ValueError('Unable to refresh display: %s %s' % (display.yx, display.tlbr))
+
+    while True:
+        match_buf, candidates_now = get_candidates(match_buf)
+
+        if cursor_y < 0:
+            cursor_y = 0
+
+        if cursor_y >= len(candidates_now):
+            cursor_y = len(candidates_now) - 1
+
+        y, x = cursor_yx(cursor_y)
+        if x < display.x_offset:
+            display.x_offset = x
+        while x >= (frame.hw.w + display.x_offset):
+            display.x_offset += candidates.hw.w
+
+        update_display(candidates_now)
+
+        ch = stdscr.getch()
+        if ch == 27:  # ESC
+            return None
+        elif ch in (410, -1):
+            return None
+        elif ch == 10:  # RETURN
+            if len(candidates_now):
+                return candidates_now[cursor_y]
+        elif ch == 21:  # CTRL+U
+            match_buf = ''
+        elif ch == 23:  # CTRL+W
+            match_buf = match_buf.rstrip() 
+            if len(match_buf) and ' ' in match_buf:
+                match_buf = match_buf[:match_buf.rfind(' ')]
+            else:
+                match_buf = ''
+        elif ch == 259:  # UP
+            cursor_y -= 1
+        elif ch == 258:  # DOWN
+            cursor_y += 1
+        elif ch == 338:  # PGDN
+            if (cursor_y + 1) % display.hw.h == 0:
+                cursor_y += 1
+            else:
+                cursor_y -= cursor_y % display.hw.h
+                cursor_y += (display.hw.h - 1)
+        elif ch == 339:  # PGUP
+            if cursor_y % display.hw.h == 0:
+                cursor_y -= 1
+            else:
+                cursor_y -= cursor_y % display.hw.h
+        elif ch == 260:  # LEFT
+            cursor_y -= display.hw.h
+        elif ch == 261:  # RIGHT
+            cursor_y += display.hw.h
+        elif ch == 262:  # HOME
+            cursor_y = 0
+        elif ch == 360:  # END
+            cursor_y = candidates.hw.h - 1
+        elif ch in (127, 263):  # BACKSPACE
+            match_buf = match_buf[:-1]
+        elif ch == ord(' '):  # SPACE
+            if not match_buf or match_buf[-1] != ' ':
+                match_buf += '%c' % ch
+            else:
+                flash_match(match_buf)
+        elif 32 <= ch <= 126:  # Most normal chars
+            match_buf += '%c' % ch
+        else:
+            flash_match(match_buf)
+
+
+def main(argv):
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog='For a demo run: %(prog)s demo'
+    )
+    parser.add_argument(
+        '-t', '--title',
+        default='Make your selection and hit RETURN',
+        help='Text displayed at top of terminal'
+    )
+    parser.add_argument(
+        '-p', '--prompt',
+        default='Match >',
+        help='Text that prefixes the match entry at bottom of terminal'
+    )
+    parser.add_argument(
+        '-v', '--value-file',
+        default=None,
+        help='Write the selected value to this file'
+    )
+    parser.add_argument(
+        'list',
+        default='Match >',
+        help='A CSV file with "Value[,Display[,Extra]]" fields from which the selection is to be made'
+    )
+    args = parser.parse_args()
+    
+    if os.path.exists(args.list):
+        with open(args.list, 'rt') as fh:
+            all_candidates = load_candidates(fh)
+    else:
+        if args.list == 'demo':
+            args.title = "DEMO: " + args.title
+            args.prompt = "Type fragments to shorten list: " + args.prompt 
+            all_candidates = DEMO_CANDIDATES
+        else:
+            sys.stderr.write('List file not found: %s\n' % args.list)
+            exit(2)
+
+    ret = wrapper(top, args.title, args.prompt, all_candidates)
+    if not ret:
+        exit(1)
+
+    if args.value_file:
+        with open(args.value_file, 'wt') as fh:
+            fh.write(ret.value)
+    else:
+        print(ret.value)
+
+
+if __name__ == "__main__":
+    try:
+        main(sys.argv)
+    except ValueError as ex:
+        sys.stdout.write('%s\n' % ex)
+        exit(2)
+    except KeyboardInterrupt:
+        exit(1)

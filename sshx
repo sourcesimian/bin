@@ -1,0 +1,104 @@
+#!/bin/bash
+
+_realpath() {
+    [[ $1 = /* ]] && echo "$1" || echo "$PWD/${1#./}"
+}
+
+_stat_mode() {
+    if [[ "$OSTYPE" == darwin* ]]; then
+        stat -f %Lp "$1"
+    else
+        stat --format %a "$1"
+    fi
+}
+
+_stat_mtime() {
+    if [[ "$OSTYPE" == darwin* ]]; then
+        stat -f '%m' "$1"
+    else
+        stat -c '%Y' "$1"
+    fi
+}
+
+cat_base64_file() {
+    local FILE=${1:?[?FILE]}
+    echo "cat<<_ |base64 --decode" "${@:2}"
+    cat "$FILE" | base64
+    echo "_"
+}
+
+is_marshalable_file() {
+    local FILE=${1:?[?FILE]}
+    if [ -e "$FILE" -a ! -d "$FILE" ] && [[ "$FILE" =~ ^/dev/fd/* || "$(_realpath "$FILE")" =~ ^/tmp/*|^/home/*|^/Users/* ]]; then
+        return 0
+    else
+        return 1
+    fi
+}
+
+match_count() {
+    local HAYSTACK=${1:?[?HAYSTACK]}
+    local NEEDLE=${2:?[?NEEDLE]}
+    local X=${HAYSTACK//$NEEDLE}
+    echo $(((${#HAYSTACK} - ${#X}) / ${#NEEDLE}))
+}
+
+cat_marshalled_command() {
+    cat <<"EOF"
+export SCRATCH=$(TMPDIR=$HOME mktemp -d -t .sshx-scratch.XXXXXXXX)
+#trap "{ rm -rf \"$SCRATCH\"; }" EXIT SIGINT SIGTERM SIGKILL
+chmod 700 $SCRATCH
+EOF
+
+    echo "# cmd: ${@}"
+    local ARGS=""
+    local FILES=" "
+    while [ -n "$1" ]; do
+        if is_marshalable_file "$1"; then
+            if [[ "$1" == /dev/fd/* ]]; then
+                FILENAME="~dev~fd~$(basename "$1")"
+                MODE="500"
+            elif [ -p "$1" ]; then
+                FILENAME="$(basename "$1")"
+                MODE="500"
+            else
+                FILENAME="$(basename "$1")"
+                MODE=$(_stat_mode "$1")
+            fi
+            FILE='$SCRATCH/'$FILENAME
+            MTIME=$(_stat_mtime "$1")
+
+            # Count the repeated file names and suffix index as necessary
+            COUNT=$(match_count "$FILES" "$FILE")
+            FILES=$FILES"$FILE "
+            if [ "$COUNT" != "0" ]; then
+                FILE=$FILE"~$COUNT"
+            fi
+
+            echo "# file: \"$1\" -> \"$FILE\""
+            cat_base64_file "$1" ">\"$FILE\"; chmod ${MODE} \"$FILE\"; touch -d @$MTIME \"$FILE\"" 
+
+            ARGS=$ARGS"$FILE "
+        else
+            ARGS=$ARGS$(printf '%q ' "$1")
+        fi
+        shift
+    done
+
+    cat <<EOF
+$ARGS
+EOF
+}
+
+sshx() {
+    HOST=${1:?[?HOST]}
+    if [ "$HOST" == "stdout" ]; then
+        cat_marshalled_command "${@:2}"
+        exit 0
+    fi
+    unset TTY; [ -t 1 ] && TTY="-t"
+    exec ssh $TTY $HOST \
+        /bin/bash '<(base64 --decode <<<'$(cat_marshalled_command "${@:2}"|base64|tr -d "\n")')'
+}
+
+sshx "${@}"

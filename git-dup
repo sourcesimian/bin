@@ -1,0 +1,32 @@
+#!/bin/bash
+# Source: https://github.com/sourcesimian/bin 
+# License: https://github.com/sourcesimian/bin/blob/main/LICENSE
+#
+# A git helper to add a copy of a file whilst maintaining the history
+#
+set -e
+
+function git_dup() {
+    local SRC=${1:?SRC required}
+    local DST=${2:?DST required}
+
+    mkdir -p $(dirname $DST)
+
+    echo "# git-dup: $SRC -> $DST"
+
+    git mv $SRC $DST
+    git commit -m "git-dup: $SRC -1-> $DST"
+
+    SAVED=$(git rev-parse HEAD)
+    git reset --hard HEAD^
+    git mv $SRC $SRC.copy
+    git commit -m "git-dup: $SRC -2-> $DST"
+
+    git merge ${SAVED} || true
+    git commit -a -m "git-dup: $SRC -3-> $DST"
+
+    git mv $SRC.copy $SRC
+    git commit -m "git-dup: $SRC -4-> $DST"
+}
+
+git_dup "${@}"

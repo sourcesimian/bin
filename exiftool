@@ -1,0 +1,127 @@
+#!/bin/bash
+# Source: https://github.com/sourcesimian/bin 
+# License: https://github.com/sourcesimian/bin/blob/main/LICENSE
+#
+# A launcher which provides a Dockerized version of exiftool
+#
+set -e
+BASE_IMAGE=alpine:latest
+IMAGE=sourcesimian/bin/exiftool
+EXIFTOOL_VERSION=12.09
+
+function docker_image_exists() {
+    local IMAGE=${1:?IMAGE required}
+    docker image inspect -f '{{ .Created }}' "$IMAGE" &>/dev/null
+}
+
+
+function user_id() {
+    case "$(uname)" in
+        Linux*) echo "$(id -u):$(id -g)";;
+        Darwin*) echo "$(id -u)";;
+        *) echo "\"$(uname)\" not supported"; return 1;;
+    esac
+}
+
+
+function cat_entrypoint_sh() {
+    cat <<EOF
+#!/bin/sh
+
+exec /Image-ExifTool-${EXIFTOOL_VERSION}/exiftool "\${@}"
+EOF
+}
+
+
+function cat_Dockerfile() {
+    cat <<EOF
+FROM $BASE_IMAGE
+
+WORKDIR /
+
+RUN apk add perl
+
+RUN wget https://exiftool.org/Image-ExifTool-${EXIFTOOL_VERSION}.tar.gz; \
+    tar -zxf Image-ExifTool-${EXIFTOOL_VERSION}.tar.gz; \
+    rm -rf Image-ExifTool-${EXIFTOOL_VERSION}.tar.gz
+
+COPY ./entrypoint.sh .
+COPY ./$BASH_SOURCE .
+EOF
+}
+
+
+function build() {
+    echo "# --- building docker image: $IMAGE ---"
+
+    BUILD_DIR=$(mktemp -d)
+    trap "rm -rf ${BUILD_DIR}" EXIT INT TERM KILL
+
+    cat_Dockerfile > "${BUILD_DIR}"/Dockerfile
+    cat_entrypoint_sh > "${BUILD_DIR}"/entrypoint.sh
+    chmod +x "${BUILD_DIR}"/entrypoint.sh
+
+    cp $BASH_SOURCE "${BUILD_DIR}"/
+
+    BUILD_OPTS=()
+    BUILD_OPTS+=(-t "$IMAGE")
+    BUILD_OPTS+=("$BUILD_DIR")
+
+    docker build "${BUILD_OPTS[@]}"
+
+    echo "# --- build done ---"
+}
+
+
+function launch() {
+    RUN_OPTS=()
+    RUN_OPTS+=('-i')
+    [ -t 1 ] && RUN_OPTS+=('-t')
+    RUN_OPTS+=('--rm')
+    RUN_OPTS+=(--user "$(user_id)")
+    RUN_OPTS+=(--env "HOME=$HOME")
+    RUN_OPTS+=(--env "http_proxy=$http_proxy" --env "https_proxy=$https_proxy" --env "no_proxy=$no_proxy")
+    RUN_OPTS+=(-v "$(dirname "$HOME"):$(dirname "$HOME")")
+    RUN_OPTS+=(-v "/tmp:/tmp")
+    [ -e /media ] && RUN_OPTS+=(-v "/media:/media")
+    [ -e /mnt ] && RUN_OPTS+=(-v "/mnt:/mnt")
+    RUN_OPTS+=(--workdir "$PWD")
+    RUN_OPTS+=("$IMAGE")
+    RUN_OPTS+=("/entrypoint.sh")
+
+    exec docker run "${RUN_OPTS[@]}" "${@}"
+}
+
+
+if ! docker_image_exists "$IMAGE"; then
+    build
+fi
+
+
+ARGS=()
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -h|--help)
+            HELP=true
+            ;;
+        --rebuild-docker)
+            build
+            exit 0
+            ;;
+        *)
+            ;;
+    esac
+    ARGS+=($1)
+    shift
+done
+
+if [ -n "$HELP" ]; then
+cat <<EOF
+# A launcher which provides a Dockerized version of exiftool
+# Source: https://github.com/sourcesimian/bin
+EOF
+fi
+
+launch "${ARGS[@]}"
+
