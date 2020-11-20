@@ -1,0 +1,33 @@
+#!/bin/bash
+###############################################################################
+# pexec-to-file: A BASH helper to run scripts in parallel
+#
+# Source: https://github.com/sourcesimian/bin
+# License: https://github.com/sourcesimian/bin/blob/main/LICENSE
+###############################################################################
+
+show_help () {
+    echo "Usage: $(basename $0) <thread count> <pattern> <out file> <args ...>"
+    exit 1
+}
+
+if [ "$1" == "--help" ] || [ ! -n "$1" -o ! -n "$2" -o ! -n "$3" -o ! -n "$4" ]; then
+    show_help
+fi
+
+
+THREAD_COUNT=${1:?[?THREAD_COUNT]}
+PATTERN=${2:?[?PATTERN]}
+TO_FILE=${3:?[?TO_FILE]}
+
+STUB=$(mktemp -t to-file.XXXXXXXX.sh)
+trap "rm -rf $STUB" EXIT INT TERM KILL
+
+cat<<"EOF" >$STUB; chmod +x $STUB
+#!/bin/bash
+echo "# $(printf '%q ' "${@:2}")&>$1 &" >&2
+"${@:2}" &>"$1" || true
+EOF
+
+xargs -n 1 -P "$THREAD_COUNT" -I "$PATTERN" "$STUB" "$TO_FILE" "${@:4}"
+

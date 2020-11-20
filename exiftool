@@ -1,9 +1,10 @@
 #!/bin/bash
+###############################################################################
+# exiftool: A launcher which provides a Dockerized version of exiftool
+#
 # Source: https://github.com/sourcesimian/bin 
 # License: https://github.com/sourcesimian/bin/blob/main/LICENSE
-#
-# A launcher which provides a Dockerized version of exiftool
-#
+###############################################################################
 set -e
 BASE_IMAGE=alpine:latest
 IMAGE=sourcesimian/bin/exiftool

@@ -3,6 +3,7 @@
 A utility that makes selecting an item from a list quick and easy
 
 # Source: https://github.com/sourcesimian/bin 
+# License: https://github.com/sourcesimian/bin/blob/main/LICENSE
 """
 
 import argparse
@@ -183,11 +184,14 @@ def calc_dimensions(candidates, screen):
     while True:
         all_visible = True
         h = min(candidates.hw.h, screen.hw.h - 2) - h_trim
+        if h <= 3:
+            h = 3
+            all_visible = False
         if candidates.hw.w >= screen.hw.w:
             w = screen.hw.w - 1
             all_visible = False
         else:
-            cols = math.ceil(candidates.hw.h / (h -2))
+            cols = math.ceil(candidates.hw.h / (h - 2))
             while True:
                 w = cols * candidates.hw.w  # Natural width
                 if w < (screen.hw.w - 1):
@@ -401,6 +405,10 @@ def main(argv):
         else:
             sys.stderr.write('List file not found: %s\n' % args.list)
             exit(2)
+
+    if not all_candidates:
+        sys.stdout.write('Input list is empty\n')
+        exit(2)
 
     ret = wrapper(top, args.title, args.prompt, all_candidates)
     if not ret:

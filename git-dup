@@ -1,9 +1,10 @@
 #!/bin/bash
+###############################################################################
+# git-dup: A git helper to add a copy of a file whilst maintaining the history
+#
 # Source: https://github.com/sourcesimian/bin 
 # License: https://github.com/sourcesimian/bin/blob/main/LICENSE
-#
-# A git helper to add a copy of a file whilst maintaining the history
-#
+###############################################################################
 set -e
 
 function git_dup() {

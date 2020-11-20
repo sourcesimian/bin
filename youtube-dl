@@ -1,9 +1,10 @@
 #!/bin/bash
+###############################################################################
+# youtube-dl: A launcher which provides a Dockerized version of youtube-dl
+#
 # Source: https://github.com/sourcesimian/bin 
 # License: https://github.com/sourcesimian/bin/blob/main/LICENSE
-#
-# A launcher which provides a Dockerized version of youtube-dl
-#
+###############################################################################
 set -e
 BASE_IMAGE=python:3.6-alpine
 IMAGE=sourcesimian/bin/youtube-dl

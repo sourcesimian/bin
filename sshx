@@ -1,4 +1,10 @@
 #!/bin/bash
+###############################################################################
+# sshx: Run a Local Script over SSH with Interactivity
+#
+# Source: https://github.com/sourcesimian/bin
+# License: https://github.com/sourcesimian/bin/blob/main/LICENSE
+###############################################################################
 
 _realpath() {
     [[ $1 = /* ]] && echo "$1" || echo "$PWD/${1#./}"
