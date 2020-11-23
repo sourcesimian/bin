@@ -29,7 +29,7 @@ For a demo run: quick-select demo
 # Example Use Cases
 ## Basic List Selection
 We start with our list of items:
-```
+```bash
 $ cat ./items.txt
 Viola
 Ukulele
@@ -40,7 +40,7 @@ Steel Pan
 ```
 
 Then we run `quick-select` like this:
-```
+```bash
 $ quick-select ./items.txt
 ```
 
@@ -106,11 +106,33 @@ Vibraphone
 ```
 
 Now you can use the the following idiom to capture the output value:
-```
+```bash
 if quick-select -v /tmp/quick-select-value ./items.txt; then
     VALUE=$(/tmp/quick-select-value)
     ....
 else
     ...
+fi
+```
+
+## Quick SSH
+If you happen to have a large number of SSH hosts configured in your `~/.ssh/config` file, here is a quick way of getting the host you want. Save this to a script called `qssh`:
+```bash
+#!/bin/bash
+set -e
+
+EXEC=/tmp/quick-select
+URL=https://raw.githubusercontent.com/sourcesimian/bin/main/quick-select
+VALUE=/tmp/qssh-value
+
+if [ ! -e $EXEC ]; then
+    echo "# Fetcing quick-select to $EXEC"
+    curl -ks -o $EXEC $URL
+    chmod +x $EXEC
+fi
+
+if $EXEC -v $VALUE <(grep "^Host" ~/.ssh/config | grep -v -F '*' | cut -d' ' -f2- | tr ' ' '\n' | cat -s | uniq); then
+    echo "# ssh $(cat $VALUE) ${@}"
+    exec ssh $(cat $VALUE) "${@}"
 fi
 ```
