@@ -1,0 +1,217 @@
+#!/bin/bash
+###############################################################################
+# imgdl: A utility that searches and downloads the first image found on Google
+#
+# Source: https://github.com/sourcesimian/bin 
+# License: https://github.com/sourcesimian/bin/blob/main/LICENSE
+###############################################################################
+set -e
+BASE_IMAGE=python:3.7-alpine
+IMAGE=sourcesimian/bin/imgdl
+
+function docker_image_exists() {
+    local IMAGE=${1:?IMAGE required}
+    docker image inspect -f '{{ .Created }}' "$IMAGE" &>/dev/null
+}
+
+
+function user_id() {
+    case "$(uname)" in
+        Linux*) echo "$(id -u):$(id -g)";;
+        Darwin*) echo "$(id -u)";;
+        *) echo "\"$(uname)\" not supported"; return 1;;
+    esac
+}
+
+
+function cat_imgdl_py() {
+    cat <<"EOF"
+#!/usr/bin/env python3
+import argparse
+import base64
+import os
+import shutil
+import tempfile
+import time
+
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+from selenium.common.exceptions import NoSuchElementException
+
+from urllib.parse import urlparse
+
+
+def dump_google_image(fh, query):
+    USER_DATA_DIR = '/tmp/imgdl'
+
+    options = Options()
+    options.add_argument('--disable-extensions')
+    options.add_argument('--disable-gpu')
+    options.add_argument('--disable-dev-shm-usage')
+    options.add_argument('--no-sandbox')
+    options.add_argument('--headless')
+    options.add_argument('--user-data-dir=%s' % USER_DATA_DIR)
+    options.add_argument('--user-agent="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Ubuntu Chromium/73.0.3683.86 Chrome/73.0.3683.86 Safari/537.36"')
+    # options.binary_location = "./chromedriver"
+
+    with webdriver.Chrome(options=options) as driver:
+        driver.set_window_size(1024, 768)
+
+        start_url = "https://images.google.com/"
+        driver.get(start_url)
+
+        print("URL:", driver.current_url)
+
+        search = driver.find_element_by_xpath("//input[@title = 'Search']")
+        search.send_keys(query + '\n')
+
+        thumbnail_xpath = "/html/body/div[2]/c-wiz/div[3]/div[1]//div[1]/div[1]/a[1]/div[1]/img"
+        thumbnail = driver.find_element_by_xpath(thumbnail_xpath)
+        thumbnail.click()
+
+        slide_xpath = "/html/body/div[2]/c-wiz/div[3]/div[2]//div/a[@target = '_blank' and @tabindex = '0']/img[1]"
+        slide = driver.find_element_by_xpath(slide_xpath)
+
+        DATA_PREFIX = 'data:'
+
+        for i in range(2):
+            src = slide.get_attribute('src')
+            if not src.startswith(DATA_PREFIX):
+                break
+            print("Waiting for URL")
+            time.sleep(1)
+            # from IPython import embed
+            # embed()
+            # exit()
+        else:
+            print('Using embedded')
+            fmt, data = src.split(',', 1)
+            fh.write(base64.b64decode(data))
+            if 'image/png' in fmt:
+                return '.png'
+            elif 'image/gif' in fmt:
+                return '.gif'
+            else:
+                return '.jpg'
+
+        driver.get(src)
+
+        img_xpath = "/html/body/img"
+        print("URL:", driver.current_url)
+
+        img = driver.find_element_by_xpath(img_xpath)
+
+        fh.write(img.screenshot_as_png)
+
+        url = urlparse(src)
+        filename_ext = os.path.splitext(url.path)[1]
+
+        return filename_ext
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description='Download image from Google Image search')
+    parser.add_argument('filename_prefix', type=str),
+    parser.add_argument('query', type=str),
+    args = parser.parse_args()
+
+    with tempfile.NamedTemporaryFile(mode='wb') as tmp:
+        ext = dump_google_image(tmp, args.query)
+        if ext:
+            filename = args.filename_prefix + ext
+            shutil.copyfile(tmp.name, filename)
+            print('Wrote:', filename)
+            exit()
+    exit(1)
+
+EOF
+}
+
+
+function cat_Dockerfile() {
+    cat <<EOF
+FROM $BASE_IMAGE
+
+RUN pip install selenium
+
+RUN apk --no-cache upgrade && apk add --no-cache chromium chromium-chromedriver
+RUN apk --no-cache upgrade && apk add --no-cache curl
+
+ADD imgdl.py /
+EOF
+}
+
+
+function build() {
+    echo "# --- building docker image: $IMAGE ---"
+
+    BUILD_DIR=$(mktemp -d)
+    trap "rm -rf ${BUILD_DIR}" EXIT INT TERM KILL
+
+    cat_Dockerfile > "${BUILD_DIR}"/Dockerfile
+
+    cat_imgdl_py  > "${BUILD_DIR}"/imgdl.py
+    chmod +x "${BUILD_DIR}"/imgdl.py
+
+    BUILD_OPTS=()
+    BUILD_OPTS+=(-t "$IMAGE")
+    BUILD_OPTS+=("$BUILD_DIR")
+
+    docker build "${BUILD_OPTS[@]}"
+
+    echo "# --- build done ---"
+}
+
+
+function launch() {
+    ARGS=("${@}")
+    
+    RUN_OPTS=()
+    RUN_OPTS+=('-i')
+    [ -t 1 ] && RUN_OPTS+=('-t')
+    RUN_OPTS+=('--rm')
+    RUN_OPTS+=(--user "$(user_id)")
+    RUN_OPTS+=(--env "HOME=$HOME")
+    RUN_OPTS+=(--env "http_proxy=$http_proxy" --env "https_proxy=$https_proxy" --env "no_proxy=$no_proxy")
+    RUN_OPTS+=(-v "$(dirname "$HOME"):$(dirname "$HOME")")
+    RUN_OPTS+=(-v "/tmp:/tmp")
+    [ -e /media ] && RUN_OPTS+=(-v "/media:/media")
+    [ -e /mnt ] && RUN_OPTS+=(-v "/mnt:/mnt")
+    RUN_OPTS+=(--workdir "$PWD")
+    RUN_OPTS+=("$IMAGE")
+
+    exec docker run "${RUN_OPTS[@]}" /imgdl.py "${ARGS[@]}"
+}
+
+
+if ! docker_image_exists "$IMAGE"; then
+    build
+fi
+
+
+ARGS=()
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -h|--help)
+            HELP=true
+            ;;
+        --rebuild-docker)
+            build
+            exit 0
+            ;;
+        *)
+            ;;
+    esac
+    ARGS+=("$1")
+    shift
+done
+
+if [ -n "$HELP" ]; then
+cat <<EOF
+# A launcher which provides a Dockerized Google Images downloader
+# Source: https://github.com/sourcesimian/bin
+EOF
+fi
+
+launch "${ARGS[@]}"
