@@ -216,7 +216,7 @@ def calc_dimensions(candidates, screen):
     return frame, display, match
 
 
-def top(stdscr, title, prompt, all_candidates):
+def top(stdscr, title, prompt, fragments, all_candidates):
     curses.noecho()
     curses.cbreak()
     curses.curs_set(0)
@@ -239,7 +239,7 @@ def top(stdscr, title, prompt, all_candidates):
         raise ValueError('Unable to create display: %s' % (display.hw,))
     match.pad = curses.newpad(*match.hw)
 
-    match_buf = ''
+    match_buf = ' '.join(fragments)
     cursor_y = 0
 
     def get_candidates(match_buf):
@@ -389,8 +389,12 @@ def main(argv):
     )
     parser.add_argument(
         'list',
-        default='Match >',
         help='A CSV file with "Value[,Display[,Extra]]" fields from which the selection is to be made'
+    )
+    parser.add_argument(
+        'fragment',
+        nargs='*',
+        help='Text to pre-populate the search fragments'
     )
     args = parser.parse_args()
     
@@ -410,7 +414,7 @@ def main(argv):
         sys.stdout.write('Input list is empty\n')
         exit(2)
 
-    ret = wrapper(top, args.title, args.prompt, all_candidates)
+    ret = wrapper(top, args.title, args.prompt, args.fragment, all_candidates)
     if not ret:
         exit(1)
 

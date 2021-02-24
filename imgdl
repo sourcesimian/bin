@@ -106,7 +106,7 @@ def dump_google_image(fh, query):
         url = urlparse(src)
         filename_ext = os.path.splitext(url.path)[1]
 
-        return filename_ext
+        return filename_ext or '.png'
 
 
 if __name__ == "__main__":
