@@ -1,33 +1,106 @@
-#!/bin/bash
+#!/usr/bin/env bash
 ###############################################################################
-# git-dup: A git helper to add a copy of a file whilst maintaining the history
+# git-dup : A git helper to duplicate files whilst maintaining the git history
+#
+# Usage: git-dup <comment> <src:dst> [<src:dst> ...]
+#
+# git-dup will create four commits, this is necessary to maintain the history.
+# When merging to a main branch these individual commits need to be maintained,
+# using a squash merge will cancel out the effect.
 #
 # Source: https://github.com/sourcesimian/bin 
 # License: https://github.com/sourcesimian/bin/blob/main/LICENSE
 ###############################################################################
 set -e
 
-function git_dup() {
-    local SRC=${1:?SRC required}
-    local DST=${2:?DST required}
+function print_src_dst() {
+    local SRC DST
+    for SRC in "${!FILE_MAP[@]}"; do
+        DST=${FILE_MAP[$SRC]}
 
-    mkdir -p $(dirname $DST)
-
-    echo "# git-dup: $SRC -> $DST"
-
-    git mv $SRC $DST
-    git commit -m "git-dup: $SRC -1-> $DST"
-
-    SAVED=$(git rev-parse HEAD)
-    git reset --hard HEAD^
-    git mv $SRC $SRC.copy
-    git commit -m "git-dup: $SRC -2-> $DST"
-
-    git merge ${SAVED} || true
-    git commit -a -m "git-dup: $SRC -3-> $DST"
-
-    git mv $SRC.copy $SRC
-    git commit -m "git-dup: $SRC -4-> $DST"
+        echo "# Dup \"$SRC\" -> \"$DST\""
+    done
 }
 
-git_dup "${@}"
+function move_src_to_dst() {
+    local SRC DST
+    for SRC in "${!FILE_MAP[@]}"; do
+        DST=${FILE_MAP[$SRC]}
+
+        run mkdir -p $(dirname "$DST")
+        run git mv "$SRC" "$DST"
+    done
+
+    run git commit -m "$COMMENT: git-dup move src to dst"
+}
+
+function move_src_to_copy() {
+    local SRC
+    run git reset --hard HEAD^
+
+    for SRC in "${!FILE_MAP[@]}"; do
+        run git mv "$SRC" "$SRC.git-dup-copy"
+    done
+
+    run git commit -m "$COMMENT: git-dup move src to copy"
+}
+
+function merge_saved() {
+    local SAVED=${1:?SAVED required}
+
+    run git merge ${SAVED} || true
+    run git commit -m "$COMMENT: git-dup merge both versions"
+}
+
+function move_copy_to_src() {
+    local SRC
+    for SRC in "${!FILE_MAP[@]}"; do
+        run git mv "$SRC.git-dup-copy" "$SRC"
+    done
+    run git commit -m "$COMMENT: git-dup moce copy to src"
+}
+
+function run() {
+    if [ -n "$DRY_RUN" ]; then
+        echo "# $(printf '%q ' "${@}")"
+    else
+        "${@}"
+    fi
+}
+
+if [ "${BASH_VERSINFO:-0}" -lt 4 ]; then
+    echo "! BASH version >= 4 required for associative array support" >&2
+    exit 1
+fi
+
+declare -A FILE_MAP
+
+case "$1" in 
+    ""|-h|--help)
+        sed -n '3,12p' "$BASH_SOURCE" | sed -e 's/^# *//'
+        exit 0
+        ;;
+esac
+
+COMMENT=${1:?COMMENT required}
+for SRC_DST in "${@:2}"; do
+    IFS=':' read -r SRC DST <<< "$SRC_DST"
+    if [ -z "$SRC" ] || [ -z "$DST" ]; then
+        echo "! Invalid src:dst argument: \"$SRC_DST\"" >&2
+        exit 1
+    fi
+    FILE_MAP[$SRC]=$DST
+done
+
+if [ -z "${FILE_MAP[@]}" ]; then
+    echo "! src:dst arguments required see --help" >&2
+    exit 1
+fi
+
+print_src_dst
+
+move_src_to_dst
+SAVED=$(run git rev-parse HEAD)
+move_src_to_copy
+merge_saved "$SAVED"
+move_copy_to_src
