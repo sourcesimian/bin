@@ -19,6 +19,9 @@ A launcher which provides a Dockerized version of exiftool. It builds a containe
 # git-dup
 A git helper to add a copy of a file whilst maintaining the history.
 
+# img
+Launcher for the Docker version of img from https://github.com/genuinetools/img
+Which is a standalone, daemon-less, unprivileged Dockerfile and OCI compatible container multi-platform image builder.
 # kubeconfig
 Easily switch between your Kubernetes clusters.
 
