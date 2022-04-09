@@ -6,6 +6,8 @@ quick-select  <!-- omit in toc -->
 - [Usage](#usage)
 - [Example Use Cases](#example-use-cases)
   - [Basic List Selection](#basic-list-selection)
+  - [Quick SSH](#quick-ssh)
+- [Alternatives](#alternatives)
 
 # Usage
 ```
@@ -136,3 +138,8 @@ if $EXEC -v $VALUE <(grep "^Host" ~/.ssh/config | grep -v -F '*' | cut -d' ' -f2
     exec ssh $(cat $VALUE) "${@}"
 fi
 ```
+
+# Alternatives
+| Name | Description |
+|---|---|
+| [FZF](https://github.com/junegunn/fzf) command-line fuzzy finder | A popular and powerful general-purpose command-line fuzzy finder. It's an interactive Unix filter for command-line that can be used with any list; files, command history, processes, hostnames, bookmarks, git commits, etc. |

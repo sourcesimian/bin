@@ -22,6 +22,7 @@ unset HELP
 
 RUN_OPTS=("--rm" "-i")
 [ -t 1 ] && RUN_OPTS+=("-t")
+RUN_OPTS+=("--volume" "/tmp:/tmp:rw")
 RUN_OPTS+=("--volume" "$(pwd):/home/user/src:ro")
 RUN_OPTS+=("--workdir" "/home/user/src")
 RUN_OPTS+=("--volume" "${HOME}/.docker:/root/.docker:ro")
@@ -33,12 +34,6 @@ ARGS=()
 while [ $# -gt 0 ]; do
     if [ "$1" = "--help" -o "$1" = "-h" ]; then
         HELP=true
-    elif [ "$1" = "--purge-state" ]; then
-        if docker inspect ${VOLUME} >/dev/null 2>&1; then
-            docker volume rm ${VOLUME}
-        fi
-        shift
-        continue
     fi
 
     if [ "$1" = "--cacert" ]; then
@@ -51,10 +46,10 @@ while [ $# -gt 0 ]; do
         fi
         RUN_OPTS+=("--volume" "$T:/etc/ssl/certs/ca.crt:ro")
         shift
-    elif [ "$1" = "-s" -o "$1" = "--state" ]; then
+    elif [ "$1" = "--state" ]; then
         T=$(abspath $2)
         if [ -d  "$T" ]; then
-            echo "Using custom state volume: $2" >&2
+            echo "# Using custom state volume: $2" >&2
         else
             echo "Custom state dir does not exist: $2" >&2
             exit 1
@@ -77,13 +72,21 @@ if [ ! -n "$CUSTOM_STATE" -a ! -n "$HELP" ]; then
             alpine /bin/sh -c "mkdir -p /state/img; chmod 777 /state/img; chown 1000:1000 /state/img"
     fi
 
-    echo "Using docker volume to store state: $VOLUME" >&2
+    echo "# docker volume: $VOLUME" >&2
     RUN_OPTS+=("--volume" "$VOLUME:/home/user/.local/share:rw")
 fi
 
 case "${ARGS[0]}" in
+    "upgrade")
+        docker pull r.j3ss.co/img
+        ;;
     "shell")
         docker run "${RUN_OPTS[@]}" --entrypoint /bin/sh r.j3ss.co/img "${ARGS[@]:1}"
+        ;;
+    "purge-state")
+        if docker inspect ${VOLUME} >/dev/null 2>&1; then
+            docker volume rm ${VOLUME}
+        fi
         ;;
     *)
         docker run "${RUN_OPTS[@]}" r.j3ss.co/img "${ARGS[@]}"
@@ -92,19 +95,20 @@ esac
 
 if [ -n "$HELP" -a "${ARGS}" == "--help" -o -z "${ARGS}" ]; then
     cat <<EOF
+Home page: https://github.com/genuinetools/img/blob/master/README.md
 
 Extra Commands:
-  shell              Launch shell in img container with state volume mounted
+  shell                  Launch shell in img container with state volume mounted
+  upgrade                Upgrade to the latest version of img
+  purge-state            Delete the docker volume "${VOLUME}" that holds the img state
+
+Global Flags:
 EOF
 fi
 
 if [ -n "$HELP" -o -z "${ARGS}" ]; then
     cat <<EOF
-
-Extra Global Flags:
-  --cacert  string   CA cert file to verify remote hosts
-  --purge-state      Delete the docker volume (${VOLUME}) that holds the img state
-
-Home page: https://github.com/genuinetools/img/blob/master/README.md
+  --cacert <path>        CA cert file to verify remote hosts
+  --state <volume>       Use custom state volume
 EOF
 fi
