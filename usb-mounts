@@ -1,0 +1,160 @@
+#!/bin/bash
+set -e
+
+USB_MOUNTS_CONFIG=${USB_MOUNTS_CONFIG:-$(cd "$(dirname "$BASH_SOURCE")"; pwd)/usb-mounts.config}
+USB_ROOT=/mnt/usb
+
+function cat_drives() {
+    # Each line of the config file represent a drive
+    # The line format is:
+    #   <filesystem> <mount/name> <disk UUID> <mount options ...>
+    # e.g:
+    #   hfsplus Samsung500G f9fe7c83-641a-3ffc-9446-0f4847734b43 -t hfsplus -o force,rw
+    #   ____ phone/extSdCard 6252-3731 -o umask=000
+    #   ext4 WesternDigital1T e4ba1e2d-a4b2-4687-86ce-2cd0b2e7047b
+
+    sed -e '/^$/d' -e '/^#/d' USB_MOUNTS_CONFIG
+}
+
+function try_mount() {
+    local fstype=$1
+    local name=$2
+    local guid=$3
+    local options=${@:4}
+
+    local mount=$USB_ROOT/$name
+
+    if [ ! -e "/dev/disk/by-uuid/$guid" ]; then
+        return
+    fi
+
+    if grep -q "$mount " /proc/mounts; then
+        return
+    fi
+
+    echo "* Mounting $mount"
+    if [ ! -e "$mount" ]; then
+        sudo mkdir -p "$mount"
+        sudo touch "$mount/_NOT_MOUNTED"
+    fi
+    sudo mount $options /dev/disk/by-uuid/"$guid" "$mount"
+}
+
+function list_mount() {
+    local fstype=$1
+    local name=$2
+    local guid=$3
+
+    local mount=$USB_ROOT/$name
+    local by_uuid=/dev/disk/by-uuid/$guid
+
+    if [ -e "$by_uuid" ]; then
+        if [ ! -e "$mount/_NOT_MOUNTED" ]; then
+            if grep -q "$mount " /proc/mounts; then
+            echo "MOUNTED: $name ($(readlink -f "$by_uuid")) $mount"
+            return
+        fi
+    fi
+    echo "PRESENT: $name ($(readlink -f "$by_uuid"))"
+    fi
+}
+
+function try_umount() {
+    local fstype=$1
+    local name=$2
+    local guid=$3
+
+    local mount=$USB_ROOT/$name
+
+    if [ -e "/dev/disk/by-uuid/$guid" ]; then
+        if [ ! -e "$mount/_NOT_MOUNTED" ]; then
+            if grep -q "$mount " /proc/mounts; then
+                echo "* Unmounting: $mount"
+                sudo umount "$mount"
+            fi
+        fi
+    fi
+}
+
+function fsck_mount() {
+    local fstype=$1
+    local name=$2
+    local guid=$3
+
+    local mount=$USB_ROOT/$name
+    local by_uuid=/dev/disk/by-uuid/$guid
+
+    if [ -e "$by_uuid" ]; then
+        case "$fstype" in
+            "hfsplus")
+                if ! command -v fsck.hfsplus &>/dev/null; then
+                    echo "INSTALL: sudo apt-get install hfsprogs"
+                else
+                    echo "CHECK: $name"
+                    sudo fsck.hfsplus -f "$(realpath "$by_uuid")"
+                fi
+                ;;
+            *)
+                echo "SKIP: fsck for $name not implemented"
+                ;;
+        esac
+    fi
+}
+
+function smart_report_mount() {
+    local fstype=$1
+    local name=$2
+    local guid=$3
+
+    local mount=$USB_ROOT/$name
+    local by_uuid=/dev/disk/by-uuid/$guid
+
+    if [ -e "$by_uuid" ]; then
+        echo "SMART: $name"
+        sudo smartctl --quietmode=errorsonly "$(realpath "$by_uuid")"
+    fi
+}
+
+function map_drives() {
+    local FN=${1:?FN required}
+    local PATTERN="${2:?DRIVE or all}"
+    if [ "$PATTERN" == "all" ]; then
+        PATTERN='.*'
+    fi
+
+    cat_drives | grep "$PATTERN" | while read -r LINE; do {
+        $FN $LINE
+    } done
+}
+
+
+function info_all() {
+    grep $USB_ROOT /proc/mounts || true
+}
+
+
+case "$1" in
+    ""|"list")
+        map_drives list_mount all
+        ;;
+    "info")
+        info_all
+        ;;
+    "smart")
+        map_drives smart_report_mount "$2"
+        ;;
+    "umount")
+        map_drives try_umount "$2"
+        map_drives list_mount "$2"
+        ;;
+    "mount")
+        map_drives try_mount "$2"
+        map_drives list_mount "$2"
+        ;;
+    "fsck")
+        map_drives fsck_mount "$2"
+        ;;
+
+    *) echo "Usage: $0 [list | info | mount|umount|smart|fsck <drive>]"
+        ;;
+esac
