@@ -1,16 +1,57 @@
 #!/bin/bash
 ###############################################################################
-# sshx: Run a Local Script over SSH with Interactivity
+# sshx: Run a Local Script over SSH
 #
 # Source: https://github.com/sourcesimian/bin
-# License: https://github.com/sourcesimian/bin/blob/main/LICENSE
 ###############################################################################
+set -e
 
-_realpath() {
+function usage () {
+   cat <<EOF
+sshx [options] -- [command]
+
+Run a Local Script over SSH
+
+Options:
+  *                SSH options
+  --workdir=<dir>  Change to directory before running command
+  --debug          Run the wrapper script with debug output
+  --dump[=<file>]  Write the wrapper script to the file. Default /dev/stdout
+
+Command:
+  The command and arguments you wish to run on the remote host. This may
+  include a local script and/or local argument files.
+
+A SSH wrapper script that serialises a local command/script and runs it on
+a remote host. All arguments which are local files are serialised and made
+available on the remote host. The total size of the command/script and file
+arguments must be less than ARG_MAX since the upload is done in the SSH
+command line buffer.
+
+EOF
+}
+
+function require () {
+    if ! type -P "$1" > /dev/null; then
+        echo "Required binary missing: '$1'" >&2
+        return 1
+    fi
+}
+
+function resolve_path() {
+    local RES
+    if RES=$(which "$1"); then
+        echo "$RES"
+        return
+    fi
+    echo "$1"
+}
+
+function realpath () {
     [[ $1 = /* ]] && echo "$1" || echo "$PWD/${1#./}"
 }
 
-_stat_mode() {
+function stat_mode () {
     if [[ "$OSTYPE" == darwin* ]]; then
         stat -f %Lp "$1"
     else
@@ -18,7 +59,7 @@ _stat_mode() {
     fi
 }
 
-_stat_mtime() {
+function stat_mtime () {
     if [[ "$OSTYPE" == darwin* ]]; then
         stat -f '%m' "$1"
     else
@@ -26,85 +67,153 @@ _stat_mtime() {
     fi
 }
 
-cat_base64_file() {
+function cat_base64_file () {
     local FILE=${1:?[?FILE]}
-    echo "cat<<_ |base64 --decode" "${@:2}"
-    cat "$FILE" | base64
-    echo "_"
+    echo "base64 --decode <<<\"$(base64 "$FILE")\"" "${@:2}"
 }
 
-is_marshalable_file() {
+function is_marshalable_file () {
     local FILE=${1:?[?FILE]}
-    if [ -e "$FILE" -a ! -d "$FILE" ] && [[ "$FILE" =~ ^/dev/fd/* || "$(_realpath "$FILE")" =~ ^/tmp/*|^/home/*|^/Users/* ]]; then
+    if [ -e "$FILE" ] && [ ! -d "$FILE" ] && [[ "$FILE" =~ ^/dev/fd/* || "$(realpath "$FILE")" =~ ^/tmp/*|^/mnt/*|^/media/*|^/home/*|^/Users/* ]]; then
         return 0
     else
         return 1
     fi
 }
 
-match_count() {
-    local HAYSTACK=${1:?[?HAYSTACK]}
-    local NEEDLE=${2:?[?NEEDLE]}
+function match_count () {
+    local NEEDLE=${1:?[?NEEDLE]}
+    local HAYSTACK=${*:2}
     local X=${HAYSTACK//$NEEDLE}
     echo $(((${#HAYSTACK} - ${#X}) / ${#NEEDLE}))
 }
 
-cat_marshalled_command() {
-    cat <<"EOF"
-export SCRATCH=$(TMPDIR=$HOME mktemp -d -t .sshx-scratch.XXXXXXXX)
-#trap "{ rm -rf \"$SCRATCH\"; }" EXIT SIGINT SIGTERM SIGKILL
-chmod 700 $SCRATCH
-EOF
-
-    echo "# cmd: ${@}"
-    local ARGS=""
-    local FILES=" "
+function cat_marshalled_command () {
+    local ARGS=()
+    local NAME_LIST=()
+    local FILES=()
+    local ARG_INDEX=0
+    local ARG NAME_COUNT MODE FILE MTIME
     while [ -n "$1" ]; do
-        if is_marshalable_file "$1"; then
+        ARG="$1"
+        if [ "$ARG_INDEX" == "0" ]; then
+            ARG=$(resolve_path "$ARG")
+        fi
+        if is_marshalable_file "$ARG"; then
             if [[ "$1" == /dev/fd/* ]]; then
-                FILENAME="~dev~fd~$(basename "$1")"
+                FILE="~dev~fd~$(basename "$ARG")"
                 MODE="500"
-            elif [ -p "$1" ]; then
-                FILENAME="$(basename "$1")"
+            elif [ -p "$ARG" ]; then
+                FILE="$(basename "$ARG")"
                 MODE="500"
             else
-                FILENAME="$(basename "$1")"
-                MODE=$(_stat_mode "$1")
+                FILE="$(basename "$ARG")"
+                MODE=$(stat_mode "$ARG")
             fi
-            FILE='$SCRATCH/'$FILENAME
-            MTIME=$(_stat_mtime "$1")
+            FILE="\$CTX/"$(printf '%q' "$FILE")
+            MTIME=$(stat_mtime "$ARG")
 
             # Count the repeated file names and suffix index as necessary
-            COUNT=$(match_count "$FILES" "$FILE")
-            FILES=$FILES"$FILE "
-            if [ "$COUNT" != "0" ]; then
-                FILE=$FILE"~$COUNT"
+            NAME_COUNT=$(match_count "$FILE" "${NAME_LIST[@]}")
+            NAME_LIST+=("$FILE")
+            if [ "$NAME_COUNT" != "0" ]; then
+                FILE=$FILE"~$NAME_COUNT"
             fi
 
-            echo "# file: \"$1\" -> \"$FILE\""
-            cat_base64_file "$1" ">\"$FILE\"; chmod ${MODE} \"$FILE\"; touch -d @$MTIME \"$FILE\"" 
+            FILES+=("$(cat_base64_file "$ARG" ">$FILE;chmod $MODE $FILE;touch -d @$MTIME $FILE")")
 
-            ARGS=$ARGS"$FILE "
+            ARGS+=("$FILE")
         else
-            ARGS=$ARGS$(printf '%q ' "$1")
+            ARGS+=($(printf '%q' "$ARG"))
         fi
-        shift
+        shift || break
+        ARG_INDEX=$((ARG_INDEX+1))
     done
 
-    cat <<EOF
-$ARGS
-EOF
+    if [ "$DEBUG" ]; then
+        echo 'set -x'
+    fi
+    if [ "${#FILES[@]}" != "0" ]; then
+        echo 'CTX=$(TMPDIR="$HOME" mktemp -d -t .sshx.XXXXXXXX)'
+        echo 'trap "{ rm -rf \"\$CTX\"; }" EXIT SIGINT SIGTERM SIGKILL'
+        echo 'chmod 700 "$CTX"'
+        printf "%s\n" "${FILES[@]}"
+    fi
+    if [ "$WORKDIR" ]; then
+        echo "cd $(printf '%q' "$WORKDIR")"
+    fi
+    echo "${ARGS[@]}"
 }
 
-sshx() {
-    HOST=${1:?[?HOST]}
-    if [ "$HOST" == "stdout" ]; then
-        cat_marshalled_command "${@:2}"
-        exit 0
+function sshx () {
+    local STAGE=ssh
+    local SSH=()
+    local CMD=()
+    local DUMP DEBUG
+    while [ -n "$1" ]; do
+        if [ "$1" == "--" ]; then
+            STAGE=cmd
+        else
+            case "$STAGE" in
+                ssh)
+                    case "$1" in
+                        --help)
+                            usage
+                            return 1
+                            ;;
+                        --dump)
+                            DUMP=/dev/stdout
+                            ;;
+                        --dump=*)
+                            DUMP=${1/#*=/}
+                            ;;
+                        --debug)
+                            DEBUG=true
+                            ;;
+                        --workdir)
+                            WORKDIR=$2
+                            shift
+                            ;;
+                        --workdir=*)
+                            WORKDIR=${1/#*=/}
+                            ;;
+                        *)
+                            SSH+=("$1")
+                            ;;
+                    esac
+                    ;;
+                cmd)
+                    CMD+=("$1")
+                    ;;
+            esac
+        fi
+        shift || break
+    done
+
+    if [ "$DUMP" ]; then
+        cat_marshalled_command "${CMD[@]}" > "$DUMP"
+        return
     fi
-    unset TTY; [ -t 1 ] && TTY="-t"
-    exec ssh $TTY $HOST \
-        /bin/bash '<(base64 --decode <<<'$(cat_marshalled_command "${@:2}"|base64|tr -d "\n")')'
+    if [ ! "${SSH[*]}" ]; then
+        usage
+        exit 1
+    fi
+    if [ -t 1 ]; then
+        SSH+=("-t")
+    fi
+
+    SSHX=(ssh "${SSH[@]}")
+    if [ "${SSH[*]}" ] && [ "${CMD[*]}" ]; then
+        SSHX+=(/bin/bash)
+        SSHX+=('<('$(cat_base64_file <(cat_marshalled_command "${CMD[@]}"))')')
+    fi
+    exec "${SSHX[@]}"
 }
+
+require base64
+require tr
+require printf
+require basename
+require stat
 
 sshx "${@}"
