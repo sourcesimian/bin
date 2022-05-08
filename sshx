@@ -8,25 +8,30 @@ set -e
 
 function usage () {
    cat <<EOF
-sshx [options] -- [command]
+SSHX: Run a Local Script over SSH                     v1.0   by Source Simian
 
-Run a Local Script over SSH
+A SSH utility script that serialises a local command including the contents of
+any script and argument files and runs it on a remote host. The total size of
+the command and file arguments must be less than ARG_MAX since the upload is
+done in the SSH command line buffer.
+
+Usage:  sshx [options] -- [command]
 
 Options:
   *                SSH options
   --workdir=<dir>  Change to directory before running command
-  --debug          Run the wrapper script with debug output
-  --dump[=<file>]  Write the wrapper script to the file. Default /dev/stdout
+  --env=<name>     Export local environment variable to the remote host
+  --rcfile=<file>  Source this file before running the command
+  --gzip           Compress the launcher script content with Gzip
+  --debug          Run the launcher script with debug output
+  --dump[=<file>]  Write the launcher script to the file. Default /dev/stdout
 
 Command:
   The command and arguments you wish to run on the remote host. This may
   include a local script and/or local argument files.
 
-A SSH wrapper script that serialises a local command/script and runs it on
-a remote host. All arguments which are local files are serialised and made
-available on the remote host. The total size of the command/script and file
-arguments must be less than ARG_MAX since the upload is done in the SSH
-command line buffer.
+Source:
+  https://github.com/sourcesimian/bin
 
 EOF
 }
@@ -69,7 +74,12 @@ function stat_mtime () {
 
 function cat_base64_file () {
     local FILE=${1:?[?FILE]}
-    echo "base64 --decode <<<\"$(base64 "$FILE")\"" "${@:2}"
+    echo "base64 --decode <<<\"$(base64 "$FILE" | tr -d "\n")\"" "${@:2}"
+}
+
+function cat_gzip_file () {
+    local FILE=${1:?[?FILE]}
+    echo "gunzip < <(base64 --decode <<<\"$(base64 <(gzip <"$FILE") | tr -d "\n")\")"
 }
 
 function is_marshalable_file () {
@@ -90,10 +100,10 @@ function match_count () {
 
 function cat_marshalled_command () {
     local ARGS=()
-    local NAME_LIST=()
-    local FILES=()
+    local FILE_LIST=()
+    local B64_FILES=()
     local ARG_INDEX=0
-    local ARG NAME_COUNT MODE FILE MTIME
+    local ARG FILE_INDEX MODE FILE MTIME
     while [ -n "$1" ]; do
         ARG="$1"
         if [ "$ARG_INDEX" == "0" ]; then
@@ -114,13 +124,13 @@ function cat_marshalled_command () {
             MTIME=$(stat_mtime "$ARG")
 
             # Count the repeated file names and suffix index as necessary
-            NAME_COUNT=$(match_count "$FILE" "${NAME_LIST[@]}")
-            NAME_LIST+=("$FILE")
-            if [ "$NAME_COUNT" != "0" ]; then
-                FILE=$FILE"~$NAME_COUNT"
+            FILE_INDEX=$(match_count "$FILE" "${FILE_LIST[@]}")
+            FILE_LIST+=("$FILE")
+            if [ "$FILE_INDEX" != "0" ]; then
+                FILE=$FILE"~$FILE_INDEX"
             fi
 
-            FILES+=("$(cat_base64_file "$ARG" ">$FILE;chmod $MODE $FILE;touch -d @$MTIME $FILE")")
+            B64_FILES+=("$(cat_base64_file "$ARG" ">$FILE;chmod $MODE $FILE;touch -d @$MTIME $FILE")")
 
             ARGS+=("$FILE")
         else
@@ -133,15 +143,23 @@ function cat_marshalled_command () {
     if [ "$DEBUG" ]; then
         echo 'set -x'
     fi
-    if [ "${#FILES[@]}" != "0" ]; then
+    if [ "${#B64_FILES[@]}" != "0" ]; then
         echo 'CTX=$(TMPDIR="$HOME" mktemp -d -t .sshx.XXXXXXXX)'
         echo 'trap "{ rm -rf \"\$CTX\"; }" EXIT SIGINT SIGTERM SIGKILL'
         echo 'chmod 700 "$CTX"'
-        printf "%s\n" "${FILES[@]}"
+        printf "%s\n" "${B64_FILES[@]}"
     fi
     if [ "$WORKDIR" ]; then
         echo "cd $(printf '%q' "$WORKDIR")"
     fi
+    if [ "$RCFILE" ]; then
+        echo ". $(printf '%q' "$RCFILE")"
+    fi
+
+    for ENV in "${ENV_VARS[@]}"; do
+        echo "export $ENV=$(printf '%q' "${!ENV}")"
+    done
+
     echo "${ARGS[@]}"
 }
 
@@ -149,44 +167,63 @@ function sshx () {
     local STAGE=ssh
     local SSH=()
     local CMD=()
-    local DUMP DEBUG
+    local ENV_VARS=()
+    local DUMP DEBUG GZIP WORKDIR
     while [ -n "$1" ]; do
-        if [ "$1" == "--" ]; then
+        if [ "$STAGE" == "ssh" ] && [ "$1" == "--" ]; then
             STAGE=cmd
-        else
-            case "$STAGE" in
-                ssh)
-                    case "$1" in
-                        --help)
-                            usage
-                            return 1
-                            ;;
-                        --dump)
-                            DUMP=/dev/stdout
-                            ;;
-                        --dump=*)
-                            DUMP=${1/#*=/}
-                            ;;
-                        --debug)
-                            DEBUG=true
-                            ;;
-                        --workdir)
-                            WORKDIR=$2
-                            shift
-                            ;;
-                        --workdir=*)
-                            WORKDIR=${1/#*=/}
-                            ;;
-                        *)
-                            SSH+=("$1")
-                            ;;
-                    esac
-                    ;;
-                cmd)
-                    CMD+=("$1")
-                    ;;
-            esac
+            shift || break
+            continue
         fi
+        case "$STAGE" in
+            ssh)
+                case "$1" in
+                    --help)
+                        usage
+                        return 1
+                        ;;
+                    --dump)
+                        DUMP=/dev/stdout
+                        ;;
+                    --dump=*)
+                        DUMP=${1/#*=/}
+                        ;;
+                    --debug)
+                        DEBUG=true
+                        ;;
+                    --env)
+                        ENV_VARS+=("$2")
+                        shift
+                        ;;
+                    --env=*)
+                        ENV_VARS+=("${1/#*=/}")
+                        ;;
+                    --gzip)
+                        GZIP=true
+                        ;;
+                    --rcfile)
+                        RCFILE=$2
+                        shift
+                        ;;
+                    --rcfile=*)
+                        RCFILE=${1/#*=/}
+                        ;;
+                    --workdir)
+                        WORKDIR=$2
+                        shift
+                        ;;
+                    --workdir=*)
+                        WORKDIR=${1/#*=/}
+                        ;;
+                    *)
+                        SSH+=("$1")
+                        ;;
+                esac
+                ;;
+            cmd)
+                CMD+=("$1")
+                ;;
+        esac
         shift || break
     done
 
@@ -194,18 +231,21 @@ function sshx () {
         cat_marshalled_command "${CMD[@]}" > "$DUMP"
         return
     fi
-    if [ ! "${SSH[*]}" ]; then
+
+    if [ ! "${SSH[*]}" ] || [ ! "${CMD[*]}" ]; then
         usage
         exit 1
-    fi
-    if [ -t 1 ]; then
-        SSH+=("-t")
     fi
 
     SSHX=(ssh "${SSH[@]}")
     if [ "${SSH[*]}" ] && [ "${CMD[*]}" ]; then
         SSHX+=(/bin/bash)
-        SSHX+=('<('$(cat_base64_file <(cat_marshalled_command "${CMD[@]}"))')')
+        if [ "$GZIP" ]; then
+            require gzip
+            SSHX+=('<('$(cat_gzip_file <(cat_marshalled_command "${CMD[@]}"))')')
+        else
+            SSHX+=('<('$(cat_base64_file <(cat_marshalled_command "${CMD[@]}"))')')
+        fi
     fi
     exec "${SSHX[@]}"
 }
