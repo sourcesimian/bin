@@ -13,7 +13,7 @@ function cat_drives() {
     #   ____ phone/extSdCard 6252-3731 -o umask=000
     #   ext4 WesternDigital1T e4ba1e2d-a4b2-4687-86ce-2cd0b2e7047b
 
-    sed -e '/^$/d' -e '/^#/d' USB_MOUNTS_CONFIG
+    sed -e '/^$/d' -e '/^#/d' "$USB_MOUNTS_CONFIG"
 }
 
 function try_mount() {
